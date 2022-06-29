@@ -17,6 +17,7 @@ one for each synonym, with the definition of the original entry).
 from __future__ import absolute_import
 import imp
 import os
+import re, md5
 
 from penelope.prefix_default import get_prefix as get_prefix_default
 from penelope.utilities import get_uuid
@@ -399,6 +400,29 @@ Has synonyms:               %s
             1 def   => definition
             2+ defs => definition<SEP>definition<SEP>...
             """
+            # ignore duplicate definitions
+            good_definitions = []
+            seen_definitions = {}
+            for d in definitions:
+                h = md5.md5(d.encode("utf8", "replace")).hexdigest()
+                if seen_definitions.has_key(h):
+                    print "%s: ignoring duplicate definition in merge" % headword.encode("latin1", "replace")
+                    continue
+                seen_definitions[h] = None
+                good_definitions.append(d)
+            definitions = good_definitions
+            # definitions.sort() # looks like it sorts correctly, in spite of the HTML noise
+            # Sort by strip_html() :
+            # definitions.sort(key=lambda x: re.sub("<.*?>", "", re.sub("</.*?>", "", x)).strip())
+            # Make numbered entries appear after unnumbered ones
+            definitions.sort(key=lambda x: re.sub("^(\d+)", "~\\1", re.sub("<.*?>", "", re.sub("</.*?>", "", x)).strip()))
+            if len(definitions) > 1:
+                print "%s: merging %d definitions" % (headword.encode("latin1", "replace"), len(definitions))
+            if self.sametypesequence == u"h":
+                merge_separator = "\n\n<br/><hr/>\n\n"
+            else:
+                merge_separator = "\n____________________\n"
+            # done
             return merge_separator.join(definitions)
 
         if (self.has_unique_headwords_only) or ((merge_function is None) and (merge_separator is None)):
@@ -415,9 +439,12 @@ Has synonyms:               %s
         # delete all
         self.clear()
         # for all (unique) headwords
+        nbmerged = 0
         for headword in original_entries_index:
             original_entries_index_headword = original_entries_index[headword]
             definitions_to_be_merged = [original_entries[i].definition for i in original_entries_index_headword]
+            if len(definitions_to_be_merged) != 1:
+                nbmerged += 1
             merged_definition = merge_function(headword, definitions_to_be_merged)
             self.add_entry(headword=headword, definition=merged_definition)
             new_headword_index = len(self) - 1
@@ -427,6 +454,7 @@ Has synonyms:               %s
                 original_entry_synonyms = original_entries[i].get_synonyms()
                 for synonym in original_entry_synonyms:
                     self.add_synonym(synonym=synonym, headword_index=new_headword_index)
+        print "MERGED %d entries" % nbmerged
 
         # not needed, since we called self.clear()
         # self.sort(False, False, False, False)

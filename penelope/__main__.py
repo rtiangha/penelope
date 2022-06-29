@@ -106,17 +106,25 @@ def main():
         )
         print_info(u"Sorting before... done")
 
+    # flatten synonyms before merge !
+    # flatten synonyms, if requested
+    if arguments.flatten_synonyms:
+        print_info(u"Flattening synonyms...")
+        dictionary.flatten_synonyms()
+        print_info(u"Flattening synonyms... done")
+
     # merge definitions, if requested
     if arguments.merge_definitions:
         print_info(u"Merging...")
         dictionary.merge_definitions(merge_separator=arguments.merge_separator)
         print_info(u"Merging... done")
 
+    # done above
     # flatten synonyms, if requested
-    if arguments.flatten_synonyms:
-        print_info(u"Flattening synonyms...")
-        dictionary.flatten_synonyms()
-        print_info(u"Flattening synonyms... done")
+    # if arguments.flatten_synonyms:
+    #     print_info(u"Flattening synonyms...")
+    #     dictionary.flatten_synonyms()
+    #     print_info(u"Flattening synonyms... done")
 
     # sort dictionary after, if requested
     if arguments.sort_after:

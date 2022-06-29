@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# coding=utf-8
+# coding=latin1
 
 """
 This file contains a collection of miscellaneous utility functions.
@@ -25,6 +25,38 @@ __status__ = "Production"
 
 PY2 = (sys.version_info[0] == 2)
 
+# Try to find the real alternative seconds words
+#   brasseur, euse
+#   calculateur, trice
+#   taulard, arde
+#   travail, aux
+def to_real_words(headword):
+    if "(" in headword: # Vauvenargues (Luc de Clapiers, marquis de)
+        return headword, None
+    headwords = headword.split(", ")
+    if len(headwords) == 1:
+        return headword, None
+    firstword = headwords[0]
+    otherwords = []
+    for word in headwords[1:]:
+        if len(word) >= len(firstword): # longer => probably the more correct word
+            otherwords.append(word)
+        else:
+            firstchar = word[0]
+            if firstchar in "eéè".decode("latin1"):
+                infirstword = max( firstword.rfind("e"), firstword.rfind("é".decode("latin1")), firstword.rfind("è".decode("latin1")) )
+            else:
+                infirstword = firstword.rfind(firstchar)
+            if infirstword >= 1:
+                realword = firstword[:infirstword] + word
+                otherwords.append(realword)
+            else: # jonction non trouvée
+                if word == "e": # intact, e
+                    otherwords.append(headword+"e")
+                else: # mon, ma, mes
+                    otherwords.append(word)
+    print("%s => %r" % (headword.encode("latin1", "replace"), [w.encode("latin1", "replace") for w in otherwords]))
+    return firstword, otherwords
 
 def print_debug(msg, do_print=True):
     if do_print:

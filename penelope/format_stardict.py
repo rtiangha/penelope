@@ -14,12 +14,14 @@ import os
 import subprocess
 import struct
 import zipfile
+import time, md5
 
 from penelope.utilities import create_temp_directory
 from penelope.utilities import delete_directory
 from penelope.utilities import print_debug
 from penelope.utilities import print_error
 from penelope.utilities import print_info
+from penelope.utilities import to_real_words
 
 __author__ = "Alberto Pettarin"
 __copyright__ = "Copyright 2012-2016, Alberto Pettarin (www.albertopettarin.it)"
@@ -187,6 +189,18 @@ def read(dictionary, args, input_file_paths):
         ifo_dict = read_ifo(extracted_files["d.ifo"], has_syn, args)
         print_debug("Read .ifo file with values:\n%s" % (str(ifo_dict)), args.debug)
 
+        # split real words or not
+        dictionary.ifo_dict = ifo_dict
+        dictionary.sametypesequence = ifo_dict["sametypesequence"]
+        print_info("sametypesequence: %s" % dictionary.sametypesequence)
+        if ifo_dict["bookname"].find("English Wiktionary") >= 0:
+            dictionary.split_real_words = False
+            print_info("NOT using split_real_words")
+        else:
+            dictionary.split_real_words = True
+            print_info("using split_real_words")
+
+
         # read dict file
         dict_file_obj = io.open(extracted_files["d.dict"], "rb")
         dict_file_bytes = dict_file_obj.read()
@@ -207,7 +221,18 @@ def read(dictionary, args, input_file_paths):
                 headword = headword.decode("utf-8")
                 if args.ignore_case:
                     headword = headword.lower()
-                dictionary.add_entry(headword=headword, definition=definition)
+                # dictionary.add_entry(headword=headword, definition=definition)
+
+                # get "travail" and "travaux" out of "travail, aux"
+                if dictionary.split_real_words:
+                    firstword, otherwords = to_real_words(headword)
+                else: # if really not to be done (wikitionary):
+                    firstword, otherwords = headword, None
+
+                dictionary.add_entry(headword=firstword, definition=definition.strip())
+                if otherwords:
+                    for w in otherwords:
+                        dictionary.add_synonym(synonym=w, headword_index=len(dictionary.entries)-1)
                 headword = b""
             else:
                 # read next byte
@@ -230,7 +255,10 @@ def read(dictionary, args, input_file_paths):
                     index_int = int((struct.unpack('>i', index_bytes))[0])
                     synonym = synonym.decode("utf-8")
                     if index_int < len(dictionary):
-                        dictionary.add_synonym(synonym=synonym, headword_index=index_int)
+                        # Bad entries in PetitRobert2007 starting with <DIV or <div>
+                        if not synonym.lower().startswith("<div"):
+                            # print_info(synonym.encode("latin1", "replace") + "=>" + dictionary.entries[index_int].headword.encode("latin1", "replace"))
+                            dictionary.add_synonym(synonym=synonym, headword_index=index_int)
                     else:
                         # emit a warning?
                         print_debug("Synonym '%s' points to index %d >= len(dictionary), skipping it" % (index_int, synonym), args.debug)
@@ -305,6 +333,7 @@ def write(dictionary, args, output_file_path):
     dictionary.sort(by_headword=True, ignore_case=True)
 
     # write .idx and .dict files
+    ALREADY = {}
     print_debug("Writing .idx and .dict files...", args.debug)
     idx_file_obj = io.open(idx_file_path, "wb")
     dict_file_obj = io.open(dict_file_path, "wb")
@@ -315,15 +344,31 @@ def write(dictionary, args, output_file_path):
         headword_bytes = entry.headword.encode("utf-8")
         definition_bytes = entry.definition.encode("utf-8")
         definition_size = len(definition_bytes)
+
+        # avoid multiple same definition
+        reused_headword_bytes = False
+        this_offset = current_offset
+        h = md5.md5(definition_bytes).hexdigest()
+        if ALREADY.has_key( (h, definition_size) ):
+            this_offset, prev_definition_size, reused_headword_bytes = ALREADY[ (h, definition_size) ]
+            # print_info("%s: reusing offset from %s" % (headword_bytes, reused_headword_bytes))
+        else:
+            ALREADY[ (h, definition_size) ] = (this_offset, definition_size, headword_bytes)
+
         # write .idx
         idx_file_obj.write(headword_bytes)
         idx_file_obj.write(b"\0")
-        idx_file_obj.write(struct.pack('>i', current_offset))
+        # idx_file_obj.write(struct.pack('>i', current_offset))
+        idx_file_obj.write(struct.pack('>i', this_offset))
         idx_file_obj.write(struct.pack('>i', definition_size))
         current_idx_size += (len(headword_bytes) + 1 + 4 + 4)
         # write .dict
-        dict_file_obj.write(definition_bytes)
-        current_offset += definition_size
+        #
+        # dict_file_obj.write(definition_bytes)
+        # current_offset += definition_size
+        if not reused_headword_bytes:
+            dict_file_obj.write(definition_bytes)
+            current_offset += definition_size
     idx_file_obj.close()
     dict_file_obj.close()
     print_debug("Writing .idx and .dict files... done", args.debug)
@@ -338,6 +383,8 @@ def write(dictionary, args, output_file_path):
     if dictionary.has_synonyms:
         if args.ignore_synonyms:
             print_debug("Dictionary has synonyms, but ignoring them", args.debug)
+        elif args.flatten_synonyms:
+            print_info("Dictionary has synonyms, but flattened, not writing .syn file")
         else:
             print_debug("Dictionary has synonyms, writing .syn file...", args.debug)
             syn_file_obj = io.open(syn_file_path, "wb")
@@ -364,9 +411,11 @@ def write(dictionary, args, output_file_path):
             dictzip_path = DICTZIP
             if args.dictzip_path is None:
                 print_info("  Running '%s' from $PATH" % DICTZIP)
+                print_info("  cmd: "+dictzip_path+" -k "+dict_file_path)
             else:
                 dictzip_path = args.dictzip_path
                 print_info("  Running '%s' from '%s'" % (DICTZIP, dictzip_path))
+            # comment out if RAM issues (fork failure)
             proc = subprocess.Popen(
                 [dictzip_path, "-k", dict_file_path],
                 stdout=subprocess.PIPE,
@@ -374,6 +423,8 @@ def write(dictionary, args, output_file_path):
                 stderr=subprocess.PIPE
             )
             proc.communicate()
+            # uncomment for manual execution
+            # raw_input("hit enter when run manually")
             result = [dict_dz_file_path]
             files_to_compress.append(dict_dz_file_path)
             print_debug("Compressing .dict file with dictzip... done", args.debug)
@@ -384,21 +435,32 @@ def write(dictionary, args, output_file_path):
             print_error("    2. specify its path with --dictzip-path or")
             print_error("    3. specify --no-dictzip to avoid compressing the .dict file")
             result = None
+            raise # fail and keep /tmp/tmpBLAHBLAH
 
     if result is not None:
+        # use values from original ifo
+        FIXINFO = "(synonyms flattened and definitions merged with penelope on %s)" % time.strftime("%Y%m%d", time.localtime(time.time()))
         # create ifo file
         ifo_file_obj = io.open(ifo_file_path, "wb")
         ifo_file_obj.write((u"StarDict's dict ifo file\n").encode("utf-8"))
-        ifo_file_obj.write((u"version=2.4.2\n").encode("utf-8"))
+        ifo_file_obj.write((u"version=%s\n" % (dictionary.ifo_dict.get("version", "unknown"))).encode("utf-8"))
+        ifo_file_obj.write((u"sametypesequence=%s\n" % (dictionary.sametypesequence)).encode("utf-8"))
         ifo_file_obj.write((u"wordcount=%d\n" % (len(dictionary))).encode("utf-8"))
         ifo_file_obj.write((u"idxfilesize=%d\n" % (current_idx_size)).encode("utf-8"))
-        ifo_file_obj.write((u"bookname=%s\n" % (args.title)).encode("utf-8"))
-        ifo_file_obj.write((u"date=%s\n" % (args.year)).encode("utf-8"))
-        ifo_file_obj.write((u"sametypesequence=m\n").encode("utf-8"))
-        ifo_file_obj.write((u"description=%s\n" % (args.description)).encode("utf-8"))
-        ifo_file_obj.write((u"author=%s\n" % (args.author)).encode("utf-8"))
-        ifo_file_obj.write((u"email=%s\n" % (args.email)).encode("utf-8"))
-        ifo_file_obj.write((u"website=%s\n" % (args.website)).encode("utf-8"))
+        ifo_file_obj.write((u"bookname=%s\n" % (dictionary.ifo_dict["bookname"])).encode("utf-8"))
+        # ifo_file_obj.write((u"date=%s\n" % (args.year)).encode("utf-8"))
+        description = dictionary.ifo_dict.get("description", "")
+        if description:
+            description = "%s %s" % (description.strip(), FIXINFO)
+        else:
+            description = FIXINFO
+        ifo_file_obj.write((u"description=%s\n" % (description)).encode("utf-8"))
+        if dictionary.ifo_dict.get("author"):
+            ifo_file_obj.write((u"author=%s\n" % (dictionary.ifo_dict.get("author", "unknown"))).encode("utf-8"))
+        if dictionary.ifo_dict.get("email"):
+            ifo_file_obj.write((u"email=%s\n" % (dictionary.ifo_dict.get("email", "unknown"))).encode("utf-8"))
+        if dictionary.ifo_dict.get("website"):
+            ifo_file_obj.write((u"website=%s\n" % (dictionary.ifo_dict.get("website", "unknown"))).encode("utf-8"))
         if dict_syns_len > 0:
             ifo_file_obj.write((u"synwordcount=%d\n" % (dict_syns_len)).encode("utf-8"))
         ifo_file_obj.close()
